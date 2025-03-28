@@ -16,7 +16,7 @@ from pyvis.network import Network
 from sentence_transformers import SentenceTransformer
 warnings.filterwarnings('ignore')
 
-os.environ['API_KEY'] = 'sk-506f969de9e444c8b445e91d542127bc'
+os.environ['API_KEY'] = 'sk-xx'
 api_key = os.environ.get("API_KEY")
 
 
