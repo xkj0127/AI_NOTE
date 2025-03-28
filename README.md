@@ -1,5 +1,7 @@
 # 知识图谱构建与增量更新系统演示
 
+## 在线体验项目
+https://modelscope.cn/studios/xkj1615242125/kg-graphrag
 
 ## 项目展示
 
