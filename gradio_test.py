@@ -370,7 +370,7 @@ class DeepSeekAgent:
 
                 # 添加节点
                 G.add_node(source, title=source, color='#97c2fc')  # 浅蓝色
-                G.add_node(target, title=target, color='#97c2fc')  # 浅蓝色
+                G.add_node(target, title=target, color='#ffb347')  # 橙色
 
                 # 添加边
                 G.add_edge(source, target, title=relation, label=relation)
@@ -573,27 +573,27 @@ def create_interface():
     # 设置默认文件路径和默认文本
     DEFAULT_FILE = "test_text.txt"  # 你可以改为你想要的默认文件路径
     DEFAULT_TEXT = """
-    # 计算机科学
-1. 哈希表
-   - 哈希表（Hash Table）是一种数据结构，通过键值对存储数据。
-   - 它使用哈希函数计算键的索引，实现O(1)时间复杂度的查找。
-   - 冲突解决方法：链地址法（Chaining）、开放寻址法（Open Addressing）。
-   - 哈希表在数据库索引和缓存系统（如Redis）中广泛应用。
-
-2. 深度学习
-   - 神经网络由输入层、隐藏层、输出层组成。
-   - 反向传播用于优化模型参数。
-   - 常见框架：PyTorch 2.0、TensorFlow、JAX。
-
-3. 红黑树
-   - 一种自平衡二叉搜索树，保证O(log n)时间复杂度。
-   - 规则：节点是红/黑，根节点是黑，红色节点的子节点必须是黑。
-
-# 数学
-1. 线性代数
-   - 矩阵乘法不满足交换律：A×B ≠ B×A。
-   - 特征值和特征向量：Av = λv。
-   - 奇异值分解（SVD）用于降维和推荐系统。
+        # 计算机科学
+        1. 哈希表
+           - 哈希表（Hash Table）是一种数据结构，通过键值对存储数据。
+           - 它使用哈希函数计算键的索引，实现O(1)时间复杂度的查找。
+           - 冲突解决方法：链地址法（Chaining）、开放寻址法（Open Addressing）。
+           - 哈希表在数据库索引和缓存系统（如Redis）中广泛应用。
+        
+        2. 深度学习
+           - 神经网络由输入层、隐藏层、输出层组成。
+           - 反向传播用于优化模型参数。
+           - 常见框架：PyTorch 2.0、TensorFlow、JAX。
+        
+        3. 红黑树
+           - 一种自平衡二叉搜索树，保证O(log n)时间复杂度。
+           - 规则：节点是红/黑，根节点是黑，红色节点的子节点必须是黑。
+        
+        # 数学
+        1. 线性代数
+           - 矩阵乘法不满足交换律：A×B ≠ B×A。
+           - 特征值和特征向量：Av = λv。
+           - 奇异值分解（SVD）用于降维和推荐系统。
     """
 
     # 检查并创建默认文件（如果不存在）
@@ -639,7 +639,7 @@ def create_interface():
                     # 右侧列 - 更新输入
                     with gr.Column(scale=1):
                         text_update = gr.Textbox(
-                            lines=10,
+                            lines=20,
                             label="输入更新后的文本",
                             placeholder="粘贴更新后的文本内容...",
                             value=DEFAULT_TEXT  # 设置默认文本
