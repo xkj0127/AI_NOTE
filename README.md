@@ -4,10 +4,13 @@
 https://modelscope.cn/studios/xkj1615242125/kg-graphrag
 
 ## 项目展示
-
+### 更新
+![本地路径](./md_imgs/index4.png "index4")
+--------------
 ![本地路径](./md_imgs/index1.png "index1")
 ![本地路径](./md_imgs/index2.png "index2")
 ![本地路径](./md_imgs/index3.png "index3")
+
 
 ## 知识图谱自己实现的思路
 

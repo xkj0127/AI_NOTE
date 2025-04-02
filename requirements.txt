@@ -1,8 +1,10 @@
 networkx~=3.4.2
 openai~=1.58.1
 pyvis~=0.3.2
+chromadb~=0.6.3
+sentence-transformers~=3.3.1
 tiktoken~=0.8.0
 numpy~=2.2.4
 spacy~=3.8.4
-sentence-transformers~=3.3.1
+python-louvain~=0.16
 gradio~=5.23.1
