@@ -1,0 +1,22 @@
+# 短文本-两种方式的对比
+entities数量19
+relationship数量17
+fun1 执行时间: 39.629022 秒
+
+
+entities数量33
+relationship数量29
+fun2 执行时间: 68.608375 秒
+
+
+
+
+# 长文本-两种方式的对比
+entities数量34
+relationship数量12
+fun1 执行时间: 34.460760 秒
+
+
+entities数量75
+relationship数量15
+fun2 执行时间: 53.217561 秒

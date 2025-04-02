@@ -1,25 +1,29 @@
-import re
-import time
-import warnings
-import gradio as gr
-from pathlib import Path
 import json
 import os
-import webbrowser
-from typing import List, Dict, Tuple, Optional
+import re
+import time
+import sys
 import networkx as nx
-import numpy as np
-from collections import defaultdict
-import spacy
-import tiktoken
 from openai import OpenAI
+import warnings
 from pyvis.network import Network
+import tiktoken
+from typing import List, Tuple, Optional
 from sentence_transformers import SentenceTransformer
+import numpy as np
+import spacy
+import chromadb
+from collections import defaultdict
 from functools import wraps
 warnings.filterwarnings('ignore')
-
+sys.path.append('../')
 os.environ['API_KEY'] = 'sk-f76ff9a93aee49f9b86b53868b29f183'
 api_key = os.environ.get("API_KEY")
+client = chromadb.PersistentClient(path="./chroma_db")
+collection_relation = client.get_or_create_collection(name="my_collection_relation")
+embeddings = SentenceTransformer(
+    r'D:\Models_Home\Huggingface\models--BAAI--bge-base-zh\snapshots\0e5f83d4895db7955e4cb9ed37ab73f7ded339b6'
+)
 
 def timing_decorator(func):
     @wraps(func)
@@ -30,7 +34,6 @@ def timing_decorator(func):
         print(f"{func.__name__} 执行时间: {end_time - start_time:.6f} 秒")
         return result
     return wrapper
-
 
 
 def build_bidirectional_mapping(data):
@@ -55,13 +58,9 @@ def get_entity_label(knowledge_graph,entity):
 def get_entities_by_label(knowledge_graph,label):
     return knowledge_graph["label_to_entities"].get(label, [])
 
-
 def normalize_text(text):
     """去除首尾空格、合并多余空格、换行转换为空格"""
     return re.sub(r'\s+', ' ', text.strip())
-
-
-@timing_decorator
 def replace_blocks_and_find_changes(original_blocks, new_text,split_text_fun):
     """用原文块替换未变部分，找出新增和删除的块"""
     normalized_new_text = normalize_text(new_text)  # 归一化新文本
@@ -92,6 +91,8 @@ def replace_blocks_and_find_changes(original_blocks, new_text,split_text_fun):
     added_blocks = [text for i, text in enumerate(added_texts)]
 
     return replaced_text, deleted_blocks, added_blocks
+
+
 class SemanticTextSplitter:
     """
     增强版文本分割器，结合语义分析和实体边界检测
@@ -142,7 +143,6 @@ class SemanticTextSplitter:
         if self.overlap_tokens >= self.min_tokens:
             raise ValueError("overlap_tokens 应小于 min_tokens")
 
-    @timing_decorator
     def split_text(self, text: str, doc_id: Optional[str] = None) -> List[Tuple[str, str]]:
         """
         分割文本方法
@@ -284,7 +284,6 @@ class SemanticTextSplitter:
         prefix = f"{doc_id}_" if doc_id else ""
         return f"{prefix}block_{counter}_{hash(text[:50])}"
 
-splitter = SemanticTextSplitter(1024, 256)
 
 class DeepSeekAgent:
     def __init__(self):
@@ -296,7 +295,6 @@ class DeepSeekAgent:
 
     def temp_sleep(self,seconds=0.1):
         time.sleep(seconds)
-
 
     def ollama_safe_generate_response(self,prompt,input_parameter,repeat=3):
         for i in range(repeat):
@@ -320,7 +318,6 @@ class DeepSeekAgent:
                 print("ERROR")
         return -1
 
-    @timing_decorator
     def ollama_request(self,prompt,input_parameter):
         self.temp_sleep()
 
@@ -335,34 +332,64 @@ class DeepSeekAgent:
 
         return output
 
-    def 创建(self, Bolts):
+    @timing_decorator
+    def rag_local(self,query,knowledge_base):
+        prompt = open("./prompt/v2/rag_v1.txt", encoding='utf-8').read()
+        input_parameter = open("./prompt/v2/rag_v1_query.txt", encoding='utf-8').read()
+        knowledges = "\n".join(knowledge_base)
+        input_parameter = input_parameter.replace("{{query}}", query)
+        input_parameter = input_parameter.replace("{{context}}", knowledges)
+        output = self.ollama_safe_generate_response(prompt, input_parameter)
+        print(input_parameter, 1111111111111111111111111)
+        return output
+
+
+    @timing_decorator
+    def hybrid_rag(self,query,knowledge_base):
+        embedding111 = embeddings.encode(query)
+        rag = collection_relation.query(embedding111, n_results=3)
+        prompt = open("./prompt/v2/rag_v1_hybrid.txt", encoding='utf-8').read()
+        input_parameter = open("./prompt/v2/rag_v1_query_hy.txt", encoding='utf-8').read()
+        knowledges = "\n".join(knowledge_base)
+        input_parameter = input_parameter.replace("{{query}}", query)
+        input_parameter = input_parameter.replace("{{relation}}", knowledges)
+        input_parameter = input_parameter.replace("{{context}}", "\n".join(*rag['documents']))
+        print(input_parameter,1111111111111111111111111)
+        output = self.ollama_safe_generate_response(prompt, input_parameter)
+
+        return output
+
+    @timing_decorator
+    def 创建(self,Bolts):
         xx = []
         entitie_label = []
         prompt = open("./prompt/v2/entity_extraction.txt", encoding='utf-8').read()
-        prompt2 = open("./prompt/v2/relationship_extraction2.txt", encoding='utf-8').read()
-        for bid, Bolt in Bolts:
+        prompt2 = open("./prompt/v2/relationship_extraction.txt", encoding='utf-8').read()
+        for bid,Bolt in Bolts:
             input_parameter = Bolt
             output = self.ollama_safe_generate_response(prompt, input_parameter)
-            entitie_label += output["entities"]
+            entitie_label+=output["entities"]
 
             # print(output)
 
             output2 = self.ollama_safe_generate_response(prompt2,
-                                                         "笔记内容：" + input_parameter + "\n实体列表：" + json.dumps(
-                                                             output['entities']))
+                                                          "笔记内容：" + input_parameter + "\n实体列表：" + json.dumps(
+                                                              output['entities']))
             # print(output2['relations'])
 
-            xx += [{"bid": bid, "relation": output2['relations']}]
-        entitie_label = {"entities": entitie_label}
+            xx += [{"bid":bid,"relation":output2['relations']}]
+        entitie_label = {"entities":entitie_label}
         open("实体-实体类型-存储.json", mode="w", encoding='utf-8').write(
             json.dumps(entitie_label, ensure_ascii=False, indent=4))
         return xx
 
-
+    @timing_decorator
     def 知识融合(self,relations):
-        pass
-        relations_tuning = relations
-        return relations_tuning
+        prompt = open("./prompt/v2/tune_graph.txt", encoding='utf-8').read()
+        output = self.ollama_safe_generate_response(prompt, json.dumps(relations))
+        relations_tuning = output
+        # print(relations_tuning['output'])
+        return relations_tuning['output']
 
     @timing_decorator
     def 增量更新(self,original_blocks,new_text,relations):
@@ -486,170 +513,170 @@ class DeepSeekAgent:
             content = f.read()
 
             js_injection = """
-              <style>
-                  .control-panel {
-                      position: absolute;
-                      top: 10px;
-                      right: 10px;
-                      z-index: 1000;
-                      background: rgba(255,255,255,0.9);
-                      padding: 10px;
-                      border-radius: 5px;
-                      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-                  }
-                  .control-btn {
-                      padding: 8px 12px;
-                      margin: 5px;
-                      border: none;
-                      border-radius: 4px;
-                      cursor: pointer;
-                      font-size: 14px;
-                      transition: all 0.3s;
-                  }
-                  .control-btn:hover {
-                      transform: translateY(-2px);
-                      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-                  }
-                  #showAllBtn {
-                      background-color: #4CAF50;
-                      color: white;
-                  }
-                  #hideAllBtn {
-                      background-color: #f44336;
-                      color: white;
-                  }
-                  #toggleBtn {
-                      background-color: #2196F3;
-                      color: white;
-                  }
-                  #resetBtn {
-                      background-color: #9E9E9E;
-                      color: white;
-                  }
-                  .status-indicator {
-                      margin-top: 10px;
-                      font-size: 12px;
-                      color: #555;
-                  }
-              </style>
+            <style>
+                .control-panel {
+                    position: absolute;
+                    top: 10px;
+                    right: 10px;
+                    z-index: 1000;
+                    background: rgba(255,255,255,0.9);
+                    padding: 10px;
+                    border-radius: 5px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+                }
+                .control-btn {
+                    padding: 8px 12px;
+                    margin: 5px;
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    transition: all 0.3s;
+                }
+                .control-btn:hover {
+                    transform: translateY(-2px);
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                }
+                #showAllBtn {
+                    background-color: #4CAF50;
+                    color: white;
+                }
+                #hideAllBtn {
+                    background-color: #f44336;
+                    color: white;
+                }
+                #toggleBtn {
+                    background-color: #2196F3;
+                    color: white;
+                }
+                #resetBtn {
+                    background-color: #9E9E9E;
+                    color: white;
+                }
+                .status-indicator {
+                    margin-top: 10px;
+                    font-size: 12px;
+                    color: #555;
+                }
+            </style>
 
-              <script>
-              // 全局状态管理
-              const edgeStates = {};
-              let globalHideMode = true;
+            <script>
+            // 全局状态管理
+            const edgeStates = {};
+            let globalHideMode = true;
 
-              document.addEventListener("DOMContentLoaded", function() {
-                  // 初始化所有边状态
-                  network.body.data.edges.get().forEach(edge => {
-                      edgeStates[edge.id] = {
-                          clicked: false,
-                          labelVisible: false
-                      };
-                  });
+            document.addEventListener("DOMContentLoaded", function() {
+                // 初始化所有边状态
+                network.body.data.edges.get().forEach(edge => {
+                    edgeStates[edge.id] = {
+                        clicked: false,
+                        labelVisible: false
+                    };
+                });
 
-                  // 创建控制面板
-                  const container = document.getElementById("mynetwork");
-                  const panel = document.createElement("div");
-                  panel.className = "control-panel";
-                  panel.innerHTML = `
-                      <button id="showAllBtn" class="control-btn">显示所有标签</button>
-                      <button id="hideAllBtn" class="control-btn">隐藏未点击标签</button>
-                      <button id="toggleBtn" class="control-btn">切换显示状态</button>
-                      <button id="resetBtn" class="control-btn">重置所有状态</button>
-                      <div class="status-indicator">已复习: <span id="counter">0</span>/${network.body.data.edges.get().length}</div>
-                  `;
-                  container.parentNode.insertBefore(panel, container);
+                // 创建控制面板
+                const container = document.getElementById("mynetwork");
+                const panel = document.createElement("div");
+                panel.className = "control-panel";
+                panel.innerHTML = `
+                    <button id="showAllBtn" class="control-btn">显示所有标签</button>
+                    <button id="hideAllBtn" class="control-btn">隐藏未点击标签</button>
+                    <button id="toggleBtn" class="control-btn">切换显示状态</button>
+                    <button id="resetBtn" class="control-btn">重置所有状态</button>
+                    <div class="status-indicator">已复习: <span id="counter">0</span>/${network.body.data.edges.get().length}</div>
+                `;
+                container.parentNode.insertBefore(panel, container);
 
-                  // 更新计数器
-                  function updateCounter() {
-                      const count = Object.values(edgeStates).filter(s => s.clicked).length;
-                      document.getElementById("counter").innerText = count;
-                  }
+                // 更新计数器
+                function updateCounter() {
+                    const count = Object.values(edgeStates).filter(s => s.clicked).length;
+                    document.getElementById("counter").innerText = count;
+                }
 
-                  // 显示所有标签
-                  document.getElementById("showAllBtn").onclick = function() {
-                      network.body.data.edges.get().forEach(edge => {
-                          edge.font = {size: 14};
-                          edge.color = {color: "#97c2fc"};
-                          network.body.data.edges.update(edge);
-                          edgeStates[edge.id].labelVisible = true;
-                      });
-                      globalHideMode = false;
-                      updateCounter();
-                  };
+                // 显示所有标签
+                document.getElementById("showAllBtn").onclick = function() {
+                    network.body.data.edges.get().forEach(edge => {
+                        edge.font = {size: 14};
+                        edge.color = {color: "#97c2fc"};
+                        network.body.data.edges.update(edge);
+                        edgeStates[edge.id].labelVisible = true;
+                    });
+                    globalHideMode = false;
+                    updateCounter();
+                };
 
-                  // 隐藏未点击标签
-                  document.getElementById("hideAllBtn").onclick = function() {
-                      network.body.data.edges.get().forEach(edge => {
-                          if (!edgeStates[edge.id].clicked) {
-                              edge.font = {size: 0};
-                              edge.color = {color: "#97c2fc"};
-                              network.body.data.edges.update(edge);
-                              edgeStates[edge.id].labelVisible = false;
-                          }
-                      });
-                      globalHideMode = true;
-                      updateCounter();
-                  };
+                // 隐藏未点击标签
+                document.getElementById("hideAllBtn").onclick = function() {
+                    network.body.data.edges.get().forEach(edge => {
+                        if (!edgeStates[edge.id].clicked) {
+                            edge.font = {size: 0};
+                            edge.color = {color: "#97c2fc"};
+                            network.body.data.edges.update(edge);
+                            edgeStates[edge.id].labelVisible = false;
+                        }
+                    });
+                    globalHideMode = true;
+                    updateCounter();
+                };
 
-                  // 切换显示状态
-                  document.getElementById("toggleBtn").onclick = function() {
-                      globalHideMode = !globalHideMode;
-                      network.body.data.edges.get().forEach(edge => {
-                          edge.font = {size: globalHideMode && !edgeStates[edge.id].clicked ? 0 : 14};
-                          network.body.data.edges.update(edge);
-                          edgeStates[edge.id].labelVisible = !globalHideMode || edgeStates[edge.id].clicked;
-                      });
-                      updateCounter();
-                  };
+                // 切换显示状态
+                document.getElementById("toggleBtn").onclick = function() {
+                    globalHideMode = !globalHideMode;
+                    network.body.data.edges.get().forEach(edge => {
+                        edge.font = {size: globalHideMode && !edgeStates[edge.id].clicked ? 0 : 14};
+                        network.body.data.edges.update(edge);
+                        edgeStates[edge.id].labelVisible = !globalHideMode || edgeStates[edge.id].clicked;
+                    });
+                    updateCounter();
+                };
 
-                  // 重置所有状态
-                  document.getElementById("resetBtn").onclick = function() {
-                      network.body.data.edges.get().forEach(edge => {
-                          edge.font = {size: 0};
-                          edge.color = {color: "#97c2fc"};
-                          network.body.data.edges.update(edge);
-                          edgeStates[edge.id] = {
-                              clicked: false,
-                              labelVisible: false
-                          };
-                      });
-                      globalHideMode = true;
-                      updateCounter();
-                  };
+                // 重置所有状态
+                document.getElementById("resetBtn").onclick = function() {
+                    network.body.data.edges.get().forEach(edge => {
+                        edge.font = {size: 0};
+                        edge.color = {color: "#97c2fc"};
+                        network.body.data.edges.update(edge);
+                        edgeStates[edge.id] = {
+                            clicked: false,
+                            labelVisible: false
+                        };
+                    });
+                    globalHideMode = true;
+                    updateCounter();
+                };
 
-                  // 点击边持久化显示
-                  network.on("selectEdge", function(params) {
-                      const edge = network.body.data.edges.get(params.edges[0]);
-                      edgeStates[edge.id].clicked = true;
-                      edge.font = {size: 14};
-                      edge.color = {color: "#00FF00", highlight: "#00FF00"};
-                      network.body.data.edges.update(edge);
-                      updateCounter();
-                  });
+                // 点击边持久化显示
+                network.on("selectEdge", function(params) {
+                    const edge = network.body.data.edges.get(params.edges[0]);
+                    edgeStates[edge.id].clicked = true;
+                    edge.font = {size: 14};
+                    edge.color = {color: "#00FF00", highlight: "#00FF00"};
+                    network.body.data.edges.update(edge);
+                    updateCounter();
+                });
 
-                  // 悬停边时高亮
-                  network.on("hoverEdge", function(params) {
-                      const edge = network.body.data.edges.get(params.edge);
-                      if (!edgeStates[edge.id].clicked) {
-                          edge.color = {color: "#FFA500", highlight: "#FFA500"};
-                          network.body.data.edges.update(edge);
-                      }
-                  });
+                // 悬停边时高亮
+                network.on("hoverEdge", function(params) {
+                    const edge = network.body.data.edges.get(params.edge);
+                    if (!edgeStates[edge.id].clicked) {
+                        edge.color = {color: "#FFA500", highlight: "#FFA500"};
+                        network.body.data.edges.update(edge);
+                    }
+                });
 
-                  // 移出边时恢复
-                  network.on("blurEdge", function(params) {
-                      const edge = network.body.data.edges.get(params.edge);
-                      if (!edgeStates[edge.id].clicked) {
-                          edge.color = {color: "#97c2fc", highlight: "#97c2fc"};
-                          network.body.data.edges.update(edge);
-                      }
-                  });
+                // 移出边时恢复
+                network.on("blurEdge", function(params) {
+                    const edge = network.body.data.edges.get(params.edge);
+                    if (!edgeStates[edge.id].clicked) {
+                        edge.color = {color: "#97c2fc", highlight: "#97c2fc"};
+                        network.body.data.edges.update(edge);
+                    }
+                });
 
-                  updateCounter();
-              });
-              </script>
-              """
+                updateCounter();
+            });
+            </script>
+            """
             content = content.replace("</body>", js_injection + "</body>")
             f.seek(0)
             f.write(content)
@@ -658,7 +685,16 @@ class DeepSeekAgent:
         print(f"知识图谱已生成，保存为 {html_file}")
         return G
 
+    @timing_decorator
+    def text2entity(self,text, entity=None):
+        prompt = open("./prompt/v2/entity_q2merge.txt", encoding='utf-8').read()
+        entity111 = [str(i) for i in entity]
+        input_parameter = f"实体列表：{entity111}\n问题：{text}"
+        # print(input_parameter)
+        output = self.ollama_safe_generate_response(prompt, input_parameter)
+        return output['entities']
 
+@timing_decorator
 def compare_and_visualize(G1, G2, output_file="diff_graph.html"):
     """比较两个有向图并用pyvis高亮差异"""
     # 创建合并图（包含G1和G2的所有节点和边）
@@ -734,269 +770,114 @@ def compare_and_visualize(G1, G2, output_file="diff_graph.html"):
     # 保存并显示
     nt.show(output_file)
 
-# 这里保留您原有的所有类定义 (SemanticTextSplitter, DeepSeekAgent等)
-# 为了简洁，我假设它们已经在同一个文件中定义或已导入
-
-# --------------------------
-# Gradio界面核心功能
-# --------------------------
-
-class GradioApp:
-    def __init__(self):
-        self.agent = DeepSeekAgent()
-        self.current_relations = []
-        self.current_blocks = []
-        self.graphs = {"原始": None, "更新后": None}
-        self.original_text = ""
-
-    def process_initial_files(self, files: List[str]) -> Dict:
-        """处理初始文件"""
-        filepaths = [f.name for f in files]
-        text_content = ""
-        for filepath in filepaths:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                text_content += f.read() + "\n\n"
-
-        self.original_text = text_content
-        self.current_blocks = splitter.split_text(text_content)
-        self.current_relations = self.agent.创建(self.current_blocks)
-
-        # 生成初始知识图谱
-        self.graphs["原始"] = self.agent.绘制知识图谱(self.current_relations, "原始图谱")
-
-        return {
-            "原始文本": text_content,
-            "块数量": len(self.current_blocks),
-            "关系数量": sum(len(r['relation']) for r in self.current_relations)
-        }
-
-    def process_update(self, new_text: str) -> Dict:
-        """处理增量更新"""
-        if not self.current_blocks:
-            return {"错误": "请先上传初始文件"}
-
-        # 执行增量更新
-        updated_relations = self.agent.增量更新(
-            self.current_blocks,
-            new_text,
-            self.current_relations
-        )
-
-        # 更新当前状态
-        self.current_relations = updated_relations
-        self.graphs["更新后"] = self.agent.绘制知识图谱(updated_relations, "更新图谱")
-
-        # 生成差异图谱
-        if self.graphs["原始"] and self.graphs["更新后"]:
-            compare_and_visualize(
-                self.graphs["原始"],
-                self.graphs["更新后"],
-                "差异图谱.html"
-            )
-
-        return {
-            "更新结果": "增量更新完成",
-            "新关系数量": sum(len(r['relation']) for r in updated_relations)
-        }
-
-    def get_html_report(self, report_type: str) -> str:
-        """获取HTML报告内容"""
-        filename = {
-            "原始图谱": "原始图谱.html",
-            "更新图谱": "更新图谱.html",
-            "差异图谱": "差异图谱.html"
-        }.get(report_type, "")
-
-        if filename and Path(filename).exists():
-            with open(filename, 'r', encoding='utf-8') as f:
-                html_content = f.read()
-
-            # 创建一个适应Gradio的iframe包装
-            return f"""
-            <div style="width:100%; height:600px;">
-                <iframe srcdoc='{html_content.replace("'", "&apos;")}' 
-                        style="width:100%; height:100%; border:none;"></iframe>
-            </div>
-            """
-        return f"<p>{report_type}尚未生成</p>"
-
-    def open_in_browser(self, report_type: str):
-        """在浏览器中打开报告"""
-        filename = {
-            "原始图谱": "原始图谱.html",
-            "更新图谱": "更新图谱.html",
-            "差异图谱": "差异图谱.html"
-        }.get(report_type, "")
-
-        if filename and Path(filename).exists():
-            webbrowser.open(f"file://{Path(filename).absolute()}")
-            return f"已在浏览器中打开 {report_type}"
-        return f"无法打开 {report_type}"
-
-    def get_current_text(self) -> str:
-        """获取当前所有块的文本内容"""
-        return "\n".join([text for _, text in self.current_blocks])
 
 
-# --------------------------
-# Gradio界面布局
-# --------------------------
 
-def create_interface():
-    app = GradioApp()
-    # 设置默认文件路径和默认文本
-    DEFAULT_FILE = "test_text.txt"  # 你可以改为你想要的默认文件路径
-    DEFAULT_TEXT = """
-        # 计算机科学
-        1. 哈希表
-           - 哈希表（Hash Table）是一种数据结构，通过键值对存储数据。
-           - 它使用哈希函数计算键的索引，实现O(1)时间复杂度的查找。
-           - 冲突解决方法：链地址法（Chaining）、开放寻址法（Open Addressing）。
-           - 哈希表在数据库索引和缓存系统（如Redis）中广泛应用。
-        
-        2. 深度学习
-           - 神经网络由输入层、隐藏层、输出层组成。
-           - 反向传播用于优化模型参数。
-           - 常见框架：PyTorch 2.0、TensorFlow、JAX。
-        
-        3. 红黑树
-           - 一种自平衡二叉搜索树，保证O(log n)时间复杂度。
-           - 规则：节点是红/黑，根节点是黑，红色节点的子节点必须是黑。
-        
-        # 数学
-        1. 线性代数
-           - 矩阵乘法不满足交换律：A×B ≠ B×A。
-           - 特征值和特征向量：Av = λv。
-           - 奇异值分解（SVD）用于降维和推荐系统。
-    """
+from community import community_louvain
+@timing_decorator
+def community_louvain_G(G, entity_names):
+    knowledge_base = []
+    # 执行社区检测（在整个图上）
+    partition = community_louvain.best_partition(G.to_undirected())
 
-    # 检查并创建默认文件（如果不存在）
-    if not Path(DEFAULT_FILE).exists():
-        with open(DEFAULT_FILE, "w", encoding="utf-8") as f:
-            f.write("""这是默认的示例文本文件。
-    包含一些初始内容用于构建知识图谱。
-    你可以上传自己的文件替换它。""")
-    with gr.Blocks(title="知识图谱构建系统", theme="soft") as demo:
-        gr.Markdown("# 知识图谱构建与增量更新系统")
+    # 输出每个节点所属的社区编号
+    # print("Community partition:")
+    for node, community_id in partition.items():
+        pass
+        # print(f"Node {node} belongs to community {community_id}")
 
-        with gr.Tabs():
-            with gr.Tab("初始处理"):
-                with gr.Row():
-                    file_input = gr.File(
-                        file_count="multiple",
-                        file_types=[".txt"],
-                        label="上传文本文件",
-                        value=[DEFAULT_FILE]  # 设置默认文件
-                    )
-                    process_btn = gr.Button("处理文件", variant="primary")
+    # 获取每个输入实体的社区编号
+    community_ids = set()
+    for entity in entity_names:
+        if entity in partition:
+            community_ids.add(partition[entity])
 
-                initial_stats = gr.JSON(label="处理结果")
+    # 提取特定社区内的所有节点
+    community_nodes = [node for node, comm_id in partition.items() if comm_id in community_ids]
 
-                with gr.Row():
-                    original_graph = gr.HTML(label="原始知识图谱")
-                    with gr.Column():
-                        gr.Markdown("### 原始图谱操作")
-                        show_original_btn = gr.Button("显示原始图谱")
-                        open_original_btn = gr.Button("在浏览器中打开")
+    # 构建包含选定社区内所有节点的子图
+    subgraph = G.subgraph(community_nodes)
 
-            with gr.Tab("增量更新"):
-                with gr.Row():
-                    # 左侧列 - 原文显示
-                    with gr.Column(scale=1):
-                        original_text_display = gr.Textbox(
-                            lines=20,
-                            label="当前原文内容",
-                            interactive=False
-                        )
-                        refresh_btn = gr.Button("刷新原文显示")
+    # 输出结果
+    # print("Selected Community Nodes and Edges:")
 
-                    # 右侧列 - 更新输入
-                    with gr.Column(scale=1):
-                        text_update = gr.Textbox(
-                            lines=20,
-                            label="输入更新后的文本",
-                            placeholder="粘贴更新后的文本内容...",
-                            value=DEFAULT_TEXT  # 设置默认文本
-                        )
-                        update_btn = gr.Button("执行增量更新", variant="primary")
+    # 打印每个节点及其社区编号和属性
+    for node in subgraph.nodes(data=True):
+        node_name = node[0]
+        node_attributes = node[1]
+        community_id = partition.get(node_name, 'No Community')
+
+        # print(f"Node: {node_name}, Attributes: {node_attributes}, Community ID: {community_id}")
+
+    # 打印边的信息，检查是否存在'title'属性，如果不存在则使用默认值
+    for edge in subgraph.edges(data=True):
+        relation = edge[2].get('title', 'No Title')  # 如果没有'title'属性，则返回默认值'No Title'
+        # print(edge,111111111111111)
+        print(f"Edge from {edge[0]} to {edge[1]}, Relation: {relation}")
+        knowledge_base.append(f"Edge from {edge[0]} to {edge[1]}, Relation: {relation}, context:{edge[2].get('title', 'No Title')}")
+
+    # 如果需要更详细的社区信息，可以计算模块度等
+    modularity = community_louvain.modularity(partition, G.to_undirected())
+    print(f"\nModularity of the entire graph: {modularity}")
+
+    return knowledge_base
 
 
-                update_stats = gr.JSON(label="更新结果")
-
-                with gr.Tabs():
-                    with gr.Tab("更新后图谱"):
-                        updated_graph = gr.HTML(label="更新后知识图谱")
-                        with gr.Row():
-                            show_updated_btn = gr.Button("显示更新图谱")
-                            open_updated_btn = gr.Button("在浏览器中打开")
-
-                    with gr.Tab("差异对比"):
-                        diff_graph = gr.HTML(label="差异图谱")
-                        with gr.Row():
-                            show_diff_btn = gr.Button("显示差异图谱")
-                            open_diff_btn = gr.Button("在浏览器中打开")
-
-        # 事件处理
-        process_btn.click(
-            fn=app.process_initial_files,
-            inputs=file_input,
-            outputs=initial_stats
-        )
-
-        refresh_btn.click(
-            fn=lambda: "\n".join([text for _, text in app.current_blocks]),
-            outputs=original_text_display
-        )
-
-        update_btn.click(
-            fn=app.process_update,
-            inputs=text_update,
-            outputs=update_stats
-        )
-
-        # 图谱显示控制
-        show_original_btn.click(
-            fn=lambda: app.get_html_report("原始图谱"),
-            outputs=original_graph
-        )
-
-        show_updated_btn.click(
-            fn=lambda: app.get_html_report("更新图谱"),
-            outputs=updated_graph
-        )
-
-        show_diff_btn.click(
-            fn=lambda: app.get_html_report("差异图谱"),
-            outputs=diff_graph
-        )
-
-        # 浏览器打开控制
-        open_original_btn.click(
-            fn=lambda: app.open_in_browser("原始图谱"),
-            outputs=gr.Textbox(visible=False)
-        )
-
-        open_updated_btn.click(
-            fn=lambda: app.open_in_browser("更新图谱"),
-            outputs=gr.Textbox(visible=False)
-        )
-
-        open_diff_btn.click(
-            fn=lambda: app.open_in_browser("差异图谱"),
-            outputs=gr.Textbox(visible=False)
-        )
-
-    return demo
 
 
-# --------------------------
-# 运行应用
-# --------------------------
 
-if __name__ == "__main__":
-    demo = create_interface()
-    demo.launch(
-        server_name="127.0.0.1",
-        server_port=7860,
-        share=False
+if __name__ == '__main__':
+    splitter = SemanticTextSplitter(2045,1024)
+    agent = DeepSeekAgent()
+    input_parameter = open("./docs/test_text.txt", encoding='utf-8').read()
+    Bolts = splitter.split_text(input_parameter)
+    documents = []
+    embed = []
+
+    ids = []
+    for bid, Bolt in Bolts:
+        ids.append(bid)
+        documents.append(Bolt)
+        embed.append(embeddings.encode(Bolt))
+
+
+
+    collection_relation.add(
+        documents=documents,
+        embeddings=embed,
+        ids=ids,
     )
+    # print(Bolts,111111111)
+    relations = agent.创建(Bolts)
+
+    g1 = agent.绘制知识图谱(relations,"gra1")
+    # relations2 = agent.知识融合(relations)
+    # g1t = agent.绘制知识图谱(relations2,"gra1tune")
+    input_parameter2 = open("./docs/test_text4.txt", encoding='utf-8').read()
+    relations2 = agent.增量更新(Bolts,input_parameter2,relations)
+
+    g2 = agent.绘制知识图谱(relations2,"gra2")
+    # compare_and_visualize(g1,g1t)
+
+
+    for i in range(3):
+        print("\n")
+        q = input("请输入问题")
+        entitys = agent.text2entity(q,g1)
+                             # print(entitys,1111111111111111)
+        knowledges = community_louvain_G(g1, entitys)
+        # print(knowledges,1111)
+        # print(g1,111111)
+        anw = agent.rag_local(q,knowledges)
+        print(f"回答：{"\n".join(anw['answer'])}\n参考资料：\n{"\n".join(anw['material'])}")
+
+        anw2 = agent.hybrid_rag(q, knowledges)
+        print(f"回答：{"\n".join(anw2['answer'])}\n参考资料：\n{"\n".join(anw2['material'])}")
+
+
+
+
+
+
+
+
