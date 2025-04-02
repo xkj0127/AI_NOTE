@@ -17,7 +17,7 @@ from collections import defaultdict
 from functools import wraps
 warnings.filterwarnings('ignore')
 sys.path.append('../')
-os.environ['API_KEY'] = 'sk-f76ff9a93aee49f9b86b53868b29f183'
+os.environ['API_KEY'] = 'sk-xx'
 api_key = os.environ.get("API_KEY")
 client = chromadb.PersistentClient(path="./chroma_db")
 collection_relation = client.get_or_create_collection(name="my_collection_relation")

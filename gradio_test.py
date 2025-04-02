@@ -18,7 +18,7 @@ from sentence_transformers import SentenceTransformer
 from functools import wraps
 warnings.filterwarnings('ignore')
 
-os.environ['API_KEY'] = 'sk-f76ff9a93aee49f9b86b53868b29f183'
+os.environ['API_KEY'] = 'sk-xx'
 api_key = os.environ.get("API_KEY")
 
 def timing_decorator(func):
