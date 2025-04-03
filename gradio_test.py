@@ -1,6 +1,7 @@
 import re
 import time
 import warnings
+import chromadb
 import gradio as gr
 from pathlib import Path
 import json
@@ -11,26 +12,22 @@ import networkx as nx
 import numpy as np
 from collections import defaultdict
 import spacy
+import shutil
 import tiktoken
 from openai import OpenAI
 from pyvis.network import Network
 from sentence_transformers import SentenceTransformer
-from functools import wraps
-warnings.filterwarnings('ignore')
 
+warnings.filterwarnings('ignore')
 os.environ['API_KEY'] = 'sk-xx'
 api_key = os.environ.get("API_KEY")
 
-def timing_decorator(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start_time = time.perf_counter()  # 更高精度的计时
-        result = func(*args, **kwargs)
-        end_time = time.perf_counter()
-        print(f"{func.__name__} 执行时间: {end_time - start_time:.6f} 秒")
-        return result
-    return wrapper
-
+shutil.rmtree("./chroma_db")
+client = chromadb.PersistentClient(path="./chroma_db")
+collection_relation = client.get_or_create_collection(name="my_collection_relation")
+embeddings = SentenceTransformer(
+    r'D:\Models_Home\Huggingface\models--BAAI--bge-base-zh\snapshots\0e5f83d4895db7955e4cb9ed37ab73f7ded339b6'
+)
 
 
 def build_bidirectional_mapping(data):
@@ -61,7 +58,7 @@ def normalize_text(text):
     return re.sub(r'\s+', ' ', text.strip())
 
 
-@timing_decorator
+
 def replace_blocks_and_find_changes(original_blocks, new_text,split_text_fun):
     """用原文块替换未变部分，找出新增和删除的块"""
     normalized_new_text = normalize_text(new_text)  # 归一化新文本
@@ -142,7 +139,7 @@ class SemanticTextSplitter:
         if self.overlap_tokens >= self.min_tokens:
             raise ValueError("overlap_tokens 应小于 min_tokens")
 
-    @timing_decorator
+    
     def split_text(self, text: str, doc_id: Optional[str] = None) -> List[Tuple[str, str]]:
         """
         分割文本方法
@@ -320,7 +317,7 @@ class DeepSeekAgent:
                 print("ERROR")
         return -1
 
-    @timing_decorator
+    
     def ollama_request(self,prompt,input_parameter):
         self.temp_sleep()
 
@@ -332,6 +329,21 @@ class DeepSeekAgent:
             temperature=1
         )
         output = response.choices[0].message.content
+
+        return output
+
+
+    def hybrid_rag(self, query, knowledge_base):
+        embedding111 = embeddings.encode(query)
+        rag = collection_relation.query(embedding111, n_results=3)
+        prompt = open("./prompt/v2/rag_v1_hybrid.txt", encoding='utf-8').read()
+        input_parameter = open("./prompt/v2/rag_v1_query_hy.txt", encoding='utf-8').read()
+        knowledges = "\n".join(knowledge_base)
+        input_parameter = input_parameter.replace("{{query}}", query)
+        input_parameter = input_parameter.replace("{{relation}}", knowledges)
+        input_parameter = input_parameter.replace("{{context}}", "\n".join(*rag['documents']))
+        # print(input_parameter, 1111111111111111111111111)
+        output = self.ollama_safe_generate_response(prompt, input_parameter)
 
         return output
 
@@ -364,7 +376,7 @@ class DeepSeekAgent:
         relations_tuning = relations
         return relations_tuning
 
-    @timing_decorator
+    
     def 增量更新(self,original_blocks,new_text,relations):
 
         replaced_new_text, deleted_blocks, added_blocks = replace_blocks_and_find_changes(original_blocks, new_text,
@@ -386,28 +398,25 @@ class DeepSeekAgent:
         # 被删除的块
         for bid, text in deleted_blocks:
             bids_to_remove.append(bid)
-            # print(bids_to_remove)
 
         filtered_data = [item for item in relations if item['bid'] not in bids_to_remove]
-
-
         add_data = []
         # 新增的块
         for bid, text in added_blocks:
             add_data.append((bid,text))
-        # print(add_data,2222222)
 
         relations_new = self.创建(add_data)
         out = relations_new+filtered_data
-        # print(out)
         return out
 
     def 绘制知识图谱(self, relations, name):
+        # print(relations,11111111)
         # 读取实体数据
         with open("实体-实体类型-存储.json", mode="r", encoding='utf-8') as f:
             entity_obj = json.load(f)['entities']
 
         knowledge_graph = build_bidirectional_mapping(entity_obj)
+        # print(knowledge_graph)
 
         # 创建有向图
         G = nx.DiGraph()
@@ -423,11 +432,9 @@ class DeepSeekAgent:
                 # 添加节点
                 G.add_node(source,
                            title=get_entity_label(knowledge_graph, source),
-                           color='#97c2fc',
                            group=get_entity_label(knowledge_graph, source))
                 G.add_node(target,
                            title=get_entity_label(knowledge_graph, target),
-                           color='#97c2fc',
                            group=get_entity_label(knowledge_graph, target))
 
                 # 添加边（初始状态）
@@ -658,6 +665,64 @@ class DeepSeekAgent:
         print(f"知识图谱已生成，保存为 {html_file}")
         return G
 
+    def text2entity(self, text, entity=None):
+        prompt = open("./prompt/v2/entity_q2merge.txt", encoding='utf-8').read()
+        entity111 = [str(i) for i in entity]
+        input_parameter = f"实体列表：{entity111}\n问题：{text}"
+        # print(input_parameter)
+        output = self.ollama_safe_generate_response(prompt, input_parameter)
+        return output['entities']
+
+
+
+from community import community_louvain
+def community_louvain_G(G, entity_names):
+    knowledge_base = []
+    # 执行社区检测（在整个图上）
+    partition = community_louvain.best_partition(G.to_undirected())
+
+    # 输出每个节点所属的社区编号
+    # print("Community partition:")
+    for node, community_id in partition.items():
+        pass
+        # print(f"Node {node} belongs to community {community_id}")
+
+    # 获取每个输入实体的社区编号
+    community_ids = set()
+    for entity in entity_names:
+        if entity in partition:
+            community_ids.add(partition[entity])
+
+    # 提取特定社区内的所有节点
+    community_nodes = [node for node, comm_id in partition.items() if comm_id in community_ids]
+
+    # 构建包含选定社区内所有节点的子图
+    subgraph = G.subgraph(community_nodes)
+
+    # 输出结果
+    # print("Selected Community Nodes and Edges:")
+
+    # 打印每个节点及其社区编号和属性
+    for node in subgraph.nodes(data=True):
+        node_name = node[0]
+        node_attributes = node[1]
+        community_id = partition.get(node_name, 'No Community')
+
+        # print(f"Node: {node_name}, Attributes: {node_attributes}, Community ID: {community_id}")
+
+    # 打印边的信息，检查是否存在'title'属性，如果不存在则使用默认值
+    for edge in subgraph.edges(data=True):
+        relation = edge[2].get('title', 'No Title')  # 如果没有'title'属性，则返回默认值'No Title'
+        # print(edge,111111111111111)
+        # print(f"Edge from {edge[0]} to {edge[1]}, Relation: {relation}")
+        knowledge_base.append(f"Edge from {edge[0]} to {edge[1]}, Relation: {relation}, context:{edge[2].get('title', 'No Title')}")
+
+    # 如果需要更详细的社区信息，可以计算模块度等
+    modularity = community_louvain.modularity(partition, G.to_undirected())
+    print(f"\nModularity of the entire graph: {modularity}")
+
+    return knowledge_base
+
 
 def compare_and_visualize(G1, G2, output_file="diff_graph.html"):
     """比较两个有向图并用pyvis高亮差异"""
@@ -749,6 +814,7 @@ class GradioApp:
         self.graphs = {"原始": None, "更新后": None}
         self.original_text = ""
 
+
     def process_initial_files(self, files: List[str]) -> Dict:
         """处理初始文件"""
         filepaths = [f.name for f in files]
@@ -759,6 +825,23 @@ class GradioApp:
 
         self.original_text = text_content
         self.current_blocks = splitter.split_text(text_content)
+
+        # begin  存入向量数据库
+        documents = []
+        embed = []
+        ids = []
+        for bid, Bolt in self.current_blocks:
+            ids.append(bid)
+            documents.append(Bolt)
+            embed.append(embeddings.encode(Bolt))
+
+        collection_relation.add(
+            documents=documents,
+            embeddings=embed,
+            ids=ids,
+        )
+        # end
+
         self.current_relations = self.agent.创建(self.current_blocks)
 
         # 生成初始知识图谱
@@ -898,6 +981,32 @@ def create_interface():
                         gr.Markdown("### 原始图谱操作")
                         show_original_btn = gr.Button("显示原始图谱")
                         open_original_btn = gr.Button("在浏览器中打开")
+                        # 添加 AI 聊天对话框
+                        with gr.Row():
+                            chatbot = gr.Chatbot(label="Hybrid Rag")
+                        with gr.Row():
+                            chat_input = gr.Textbox(label="输入你的问题")
+                            send_btn = gr.Button("发送")
+
+                        # 处理聊天输入
+                        def chat_response(history, user_input):
+                            entitys = app.agent.text2entity(user_input, app.graphs["原始"])
+                            knowledges = community_louvain_G(app.graphs["原始"], entitys)
+                            # anw = agent.rag_local(q, knowledges)
+                            # print(f"回答：{"\n".join(anw['answer'])}\n参考资料：\n{"\n".join(anw['material'])}")
+
+                            anw2 = app.agent.hybrid_rag(user_input, knowledges)
+                            response = f"回答：{"\n".join(anw2['answer'])}\n参考资料：\n{"\n".join(anw2['material'])}"
+                            # print(response)
+
+                            history.append((user_input, response))
+                            return history, ""
+
+                        send_btn.click(
+                            fn=chat_response,
+                            inputs=[chatbot, chat_input],
+                            outputs=[chatbot, chat_input]
+                        )
 
             with gr.Tab("增量更新"):
                 with gr.Row():
@@ -930,11 +1039,13 @@ def create_interface():
                             show_updated_btn = gr.Button("显示更新图谱")
                             open_updated_btn = gr.Button("在浏览器中打开")
 
+
                     with gr.Tab("差异对比"):
                         diff_graph = gr.HTML(label="差异图谱")
                         with gr.Row():
                             show_diff_btn = gr.Button("显示差异图谱")
                             open_diff_btn = gr.Button("在浏览器中打开")
+
 
         # 事件处理
         process_btn.click(
