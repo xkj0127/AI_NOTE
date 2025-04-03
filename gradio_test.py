@@ -21,9 +21,13 @@ from sentence_transformers import SentenceTransformer
 warnings.filterwarnings('ignore')
 os.environ['API_KEY'] = 'sk-xx'
 api_key = os.environ.get("API_KEY")
-
-shutil.rmtree("./chroma_db")
-client = chromadb.PersistentClient(path="./chroma_db")
+db_path = "./chroma_db"
+if os.path.exists(db_path):  # 检查目录是否存在
+    shutil.rmtree(db_path)   # 存在则删除
+    print(f"已删除数据库目录: {db_path}")
+else:
+    print(f"目录不存在，无需删除: {db_path}")
+client = chromadb.PersistentClient(path=db_path)
 collection_relation = client.get_or_create_collection(name="my_collection_relation")
 embeddings = SentenceTransformer(
     r'D:\Models_Home\Huggingface\models--BAAI--bge-base-zh\snapshots\0e5f83d4895db7955e4cb9ed37ab73f7ded339b6'
