@@ -14,6 +14,7 @@ from collections import defaultdict
 import spacy
 import shutil
 import tiktoken
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from openai import OpenAI
 from pyvis.network import Network
 from sentence_transformers import SentenceTransformer
@@ -29,9 +30,15 @@ else:
     print(f"目录不存在，无需删除: {db_path}")
 client = chromadb.PersistentClient(path=db_path)
 collection_relation = client.get_or_create_collection(name="my_collection_relation")
+
+
+# 方式一 加载本地模型
 embeddings = SentenceTransformer(
     r'D:\Models_Home\Huggingface\models--BAAI--bge-base-zh\snapshots\0e5f83d4895db7955e4cb9ed37ab73f7ded339b6'
 )
+# 方式二 如果还没下载模型到本地使用这个
+# embeddings = HuggingFaceEmbeddings(model_name='BAAI/bge-base-zh')
+
 
 
 def build_bidirectional_mapping(data):
@@ -362,10 +369,11 @@ class DeepSeekAgent:
             entitie_label += output["entities"]
 
             # print(output)
-
+            # 修复BUG，应为entity和label同时传入模型导致认为标签也是实体名而非实体类型
+            entitys = [i[0] for i in output['entities']]
             output2 = self.ollama_safe_generate_response(prompt2,
                                                          "笔记内容：" + input_parameter + "\n实体列表：" + json.dumps(
-                                                             output['entities']))
+                                                             entitys))
             # print(output2['relations'])
 
             xx += [{"bid": bid, "relation": output2['relations']}]
